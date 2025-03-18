@@ -11,12 +11,21 @@ if [ ! -f "$APK_PATH" ]; then
     exit 1
 fi
 
-# Save the JSON key file from the environment variable
-echo "$GCLOUD_SERVICE_ACCOUNT_JSON" | base64 --decode > $SERVICE_ACCOUNT_FILE
+# Debug: Check if the environment variable exists
+echo "Checking for GCLOUD_SERVICE_ACCOUNT_JSON variable..."
+if [ -z "$GCLOUD_SERVICE_ACCOUNT_JSON" ]; then
+    echo "Error: GCLOUD_SERVICE_ACCOUNT_JSON environment variable is not set"
+    exit 1
+fi
+
+# Save the JSON key file directly from the environment variable
+# (assuming it's not base64 encoded in Codemagic)
+echo "$GCLOUD_SERVICE_ACCOUNT_JSON" > $SERVICE_ACCOUNT_FILE
 
 # Check if the service account file was created properly
 if [ ! -s "$SERVICE_ACCOUNT_FILE" ]; then
     echo "Error: Service account file is empty or was not created properly"
+    cat $SERVICE_ACCOUNT_FILE
     exit 1
 fi
 

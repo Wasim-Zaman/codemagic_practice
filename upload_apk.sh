@@ -59,9 +59,11 @@ fi
 # Debug: Print gcloud version
 gcloud --version
 
-# Authenticate with Google Cloud with verbose output
+# Authenticate with Google Cloud with the necessary scope
 echo "Attempting to authenticate with service account..."
-gcloud auth activate-service-account --key-file=$SERVICE_ACCOUNT_FILE --verbosity=debug
+gcloud auth activate-service-account --key-file=$SERVICE_ACCOUNT_FILE \
+    --scopes="https://www.googleapis.com/auth/drive.file" \
+    --verbosity=debug
 
 # Verify authentication
 echo "Verifying authentication..."
@@ -74,7 +76,7 @@ APK_NAME="app-release_${CURRENT_DATE}.apk"
 echo "Uploading APK as $APK_NAME to Google Drive folder $FOLDER_ID..."
 
 # Get access token with error checking
-ACCESS_TOKEN=$(gcloud auth print-access-token)
+ACCESS_TOKEN=$(gcloud auth print-access-token --scopes="https://www.googleapis.com/auth/drive.file")
 if [ -z "$ACCESS_TOKEN" ]; then
     echo "Error: Failed to get access token"
     exit 1

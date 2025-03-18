@@ -32,47 +32,52 @@ APK_NAME="app-release_${CURRENT_DATE}.apk"
 
 echo "Uploading APK as $APK_NAME to Google Drive folder $FOLDER_ID..."
 
-# Get access token using JWT
-ACCESS_TOKEN=$(python3 -c "
-import json
-import time
+# Create JWT token
+JWT_HEADER=$(echo -n '{"alg":"RS256","typ":"JWT"}' | base64 | tr -d '=' | tr '/+' '_-')
+
+# Get current time and expiration time
+CURRENT_TIME=$(date +%s)
+EXPIRATION_TIME=$((CURRENT_TIME + 3600))
+
+# Extract client_email and private_key from service account file
+CLIENT_EMAIL=$(jq -r '.client_email' $SERVICE_ACCOUNT_FILE)
+PRIVATE_KEY=$(jq -r '.private_key' $SERVICE_ACCOUNT_FILE)
+
+# Create JWT claim set
+JWT_CLAIM=$(echo -n "{\"iss\":\"$CLIENT_EMAIL\",\"scope\":\"https://www.googleapis.com/auth/drive\",\"aud\":\"https://oauth2.googleapis.com/token\",\"exp\":$EXPIRATION_TIME,\"iat\":$CURRENT_TIME}" | base64 | tr -d '=' | tr '/+' '_-')
+
+# Create JWT signature using Python (more reliable than openssl for this purpose)
+JWT_SIGNATURE=$(python3 -c "
 import jwt
 import sys
 
 try:
     with open('$SERVICE_ACCOUNT_FILE') as f:
+        import json
         sa = json.load(f)
     
-    # Create JWT claims with proper scope
-    claims = {
+    header = {'alg': 'RS256', 'typ': 'JWT'}
+    payload = {
         'iss': sa['client_email'],
         'scope': 'https://www.googleapis.com/auth/drive',
         'aud': 'https://oauth2.googleapis.com/token',
-        'exp': int(time.time()) + 3600,
-        'iat': int(time.time())
+        'exp': $EXPIRATION_TIME,
+        'iat': $CURRENT_TIME
     }
     
-    # Create JWT token
-    token = jwt.encode(claims, sa['private_key'], algorithm='RS256')
-    
-    # Print token for debugging
+    token = jwt.encode(payload, sa['private_key'], algorithm='RS256', headers=header)
     print(token)
 except Exception as e:
     print(f'Error creating JWT: {str(e)}', file=sys.stderr)
     sys.exit(1)
-" 2>&1)
+")
 
-if [[ $ACCESS_TOKEN == Error* ]]; then
-    echo "Error generating JWT token: $ACCESS_TOKEN"
-    exit 1
-fi
-
-echo "Successfully generated JWT token"
+echo "JWT token: $JWT_SIGNATURE"
 
 # Exchange JWT for access token
 OAUTH_RESPONSE=$(curl -s -X POST \
   -H "Content-Type: application/x-www-form-urlencoded" \
-  -d "grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer&assertion=$ACCESS_TOKEN" \
+  -d "grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer&assertion=$JWT_SIGNATURE" \
   https://oauth2.googleapis.com/token)
 
 echo "OAuth response: $OAUTH_RESPONSE"

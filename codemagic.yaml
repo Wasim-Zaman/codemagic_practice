@@ -10,6 +10,8 @@ workflows:
           include: true
     environment:
       flutter: stable
+      groups:
+        - SECRET
       vars:
         GCLOUD_SERVICE_ACCOUNT_JSON: $GCLOUD_SERVICE_ACCOUNT_JSON
     scripts:

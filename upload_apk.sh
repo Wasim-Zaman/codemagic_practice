@@ -2,7 +2,7 @@
 
 # Define variables
 APK_PATH=build/app/outputs/flutter-apk/app-release.apk
-FOLDER_ID="1CK55EUd0suHdmIm_cowoHI4LCzwczQfm"
+FOLDER_ID="123vfqwW7DjzfX0BQYZ77Q0BOnenaYF58"  # Using the folder ID from your screenshot
 SERVICE_ACCOUNT_FILE="gcloud-service-key.json"
 
 # Check if APK exists
@@ -32,21 +32,7 @@ APK_NAME="app-release_${CURRENT_DATE}.apk"
 
 echo "Uploading APK as $APK_NAME to Google Drive folder $FOLDER_ID..."
 
-# Create JWT token
-JWT_HEADER=$(echo -n '{"alg":"RS256","typ":"JWT"}' | base64 | tr -d '=' | tr '/+' '_-')
-
-# Get current time and expiration time
-CURRENT_TIME=$(date +%s)
-EXPIRATION_TIME=$((CURRENT_TIME + 3600))
-
-# Extract client_email and private_key from service account file
-CLIENT_EMAIL=$(jq -r '.client_email' $SERVICE_ACCOUNT_FILE)
-PRIVATE_KEY=$(jq -r '.private_key' $SERVICE_ACCOUNT_FILE)
-
-# Create JWT claim set
-JWT_CLAIM=$(echo -n "{\"iss\":\"$CLIENT_EMAIL\",\"scope\":\"https://www.googleapis.com/auth/drive\",\"aud\":\"https://oauth2.googleapis.com/token\",\"exp\":$EXPIRATION_TIME,\"iat\":$CURRENT_TIME}" | base64 | tr -d '=' | tr '/+' '_-')
-
-# Create JWT signature using Python (more reliable than openssl for this purpose)
+# Create JWT signature using Python
 JWT_SIGNATURE=$(python3 -c "
 import jwt
 import sys
@@ -61,8 +47,8 @@ try:
         'iss': sa['client_email'],
         'scope': 'https://www.googleapis.com/auth/drive',
         'aud': 'https://oauth2.googleapis.com/token',
-        'exp': $EXPIRATION_TIME,
-        'iat': $CURRENT_TIME
+        'exp': int($(date +%s)) + 3600,
+        'iat': int($(date +%s))
     }
     
     token = jwt.encode(payload, sa['private_key'], algorithm='RS256', headers=header)
@@ -92,10 +78,30 @@ fi
 
 echo "Successfully obtained access token"
 
-# Upload the APK
+# Try uploading to root of My Drive first (no parent specified)
 RESPONSE=$(curl -s -X POST -L \
   -H "Authorization: Bearer $ACCESS_TOKEN" \
-  -F "metadata={name:'$APK_NAME', parents:['$FOLDER_ID']};type=application/json;charset=UTF-8" \
+  -F "metadata={name:'$APK_NAME'};type=application/json;charset=UTF-8" \
+  -F "file=@$APK_PATH;type=application/vnd.android.package-archive" \
+  "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart")
+
+# Check if upload was successful
+if [[ $RESPONSE == *"id"* ]]; then
+    echo "Upload successful to My Drive root!"
+    echo "Response: $RESPONSE"
+    
+    # Clean up
+    rm -f $SERVICE_ACCOUNT_FILE
+    exit 0
+else
+    echo "Upload to My Drive root failed, trying with folder ID..."
+    echo "Response: $RESPONSE"
+fi
+
+# Upload the APK with folder ID
+RESPONSE=$(curl -s -X POST -L \
+  -H "Authorization: Bearer $ACCESS_TOKEN" \
+  -F "metadata={name:'$APK_NAME',parents:['$FOLDER_ID']};type=application/json;charset=UTF-8" \
   -F "file=@$APK_PATH;type=application/vnd.android.package-archive" \
   "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart")
 

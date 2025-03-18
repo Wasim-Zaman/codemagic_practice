@@ -2,7 +2,7 @@
 
 # Define variables
 APK_PATH=build/app/outputs/flutter-apk/app-release.apk
-FOLDER_ID="123vfqwW7DjzfX0BQYZ77Q0BOnenaYF58"
+FOLDER_ID="1CK55EUd0suHdmIm_cowoHI4LCzwczQfm"
 SERVICE_ACCOUNT_FILE="gcloud-service-key.json"
 
 # Check if APK exists
@@ -26,61 +26,61 @@ echo "First 50 characters of service account file:"
 head -c 50 $SERVICE_ACCOUNT_FILE
 echo # New line
 
-# Install gcloud if needed
-if ! command -v gcloud &> /dev/null; then
-    echo "Installing Google Cloud SDK..."
-    curl https://sdk.cloud.google.com | bash > /dev/null
-    export PATH=$PATH:/root/google-cloud-sdk/bin
-fi
-
-# Debug: Print gcloud version
-gcloud --version
-
-# Set the OAuth scope before authentication
-export CLOUDSDK_SCOPES="https://www.googleapis.com/auth/drive.file"
-
-# Authenticate with Google Cloud
-echo "Attempting to authenticate with service account..."
-gcloud auth activate-service-account --key-file=$SERVICE_ACCOUNT_FILE
-
-# Verify authentication
-echo "Verifying authentication..."
-gcloud auth list
-
 # Get the current date for the APK name
 CURRENT_DATE=$(date +"%Y-%m-%d_%H-%M")
 APK_NAME="app-release_${CURRENT_DATE}.apk"
 
 echo "Uploading APK as $APK_NAME to Google Drive folder $FOLDER_ID..."
 
-# Get access token
-ACCESS_TOKEN=$(curl -s -H "Content-Type: application/x-www-form-urlencoded" \
-  -d "grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer" \
-  -d "assertion=$(python3 -c "
+# Get access token using JWT
+ACCESS_TOKEN=$(python3 -c "
 import json
 import time
-import base64
-
-header = {'alg': 'RS256', 'typ': 'JWT'}
-with open('$SERVICE_ACCOUNT_FILE') as f:
-    sa = json.load(f)
-
-claims = {
-    'iss': sa['client_email'],
-    'scope': 'https://www.googleapis.com/auth/drive.file',
-    'aud': 'https://oauth2.googleapis.com/token',
-    'exp': int(time.time()) + 3600,
-    'iat': int(time.time())
-}
-
 import jwt
-private_key = sa['private_key']
-token = jwt.encode(claims, private_key, algorithm='RS256', headers=header)
-print(token)
-")" \
-  https://oauth2.googleapis.com/token | jq -r .access_token)
+import sys
 
-if [ -z "$ACCESS_TOKEN" ]; then
+try:
+    with open('$SERVICE_ACCOUNT_FILE') as f:
+        sa = json.load(f)
+    
+    # Create JWT claims with proper scope
+    claims = {
+        'iss': sa['client_email'],
+        'scope': 'https://www.googleapis.com/auth/drive',
+        'aud': 'https://oauth2.googleapis.com/token',
+        'exp': int(time.time()) + 3600,
+        'iat': int(time.time())
+    }
+    
+    # Create JWT token
+    token = jwt.encode(claims, sa['private_key'], algorithm='RS256')
+    
+    # Print token for debugging
+    print(token)
+except Exception as e:
+    print(f'Error creating JWT: {str(e)}', file=sys.stderr)
+    sys.exit(1)
+" 2>&1)
+
+if [[ $ACCESS_TOKEN == Error* ]]; then
+    echo "Error generating JWT token: $ACCESS_TOKEN"
+    exit 1
+fi
+
+echo "Successfully generated JWT token"
+
+# Exchange JWT for access token
+OAUTH_RESPONSE=$(curl -s -X POST \
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  -d "grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer&assertion=$ACCESS_TOKEN" \
+  https://oauth2.googleapis.com/token)
+
+echo "OAuth response: $OAUTH_RESPONSE"
+
+# Extract access token from response
+ACCESS_TOKEN=$(echo $OAUTH_RESPONSE | jq -r '.access_token')
+
+if [ -z "$ACCESS_TOKEN" ] || [ "$ACCESS_TOKEN" == "null" ]; then
     echo "Error: Failed to get access token"
     exit 1
 fi
@@ -90,7 +90,6 @@ echo "Successfully obtained access token"
 # Upload the APK
 RESPONSE=$(curl -s -X POST -L \
   -H "Authorization: Bearer $ACCESS_TOKEN" \
-  -H "Content-Type: application/json" \
   -F "metadata={name:'$APK_NAME', parents:['$FOLDER_ID']};type=application/json;charset=UTF-8" \
   -F "file=@$APK_PATH;type=application/vnd.android.package-archive" \
   "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart")

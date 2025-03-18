@@ -16,7 +16,7 @@ workflows:
         GCLOUD_SERVICE_ACCOUNT_JSON: $GCLOUD_SERVICE_ACCOUNT_JSON
     scripts:
       - flutter pub get
-      - flutter build apk --release
+      - flutter build apk --release --output=example.apk
       - bash upload_apk.sh
     artifacts:
       - build/app/outputs/flutter-apk/app-release.apk

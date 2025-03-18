@@ -2,7 +2,7 @@
 
 # Define variables
 APK_PATH=build/app/outputs/flutter-apk/app-release.apk
-FOLDER_ID="123vfqwW7DjzfX0BQYZ77Q0BOnenaYF58" # Verify this is your actual Drive folder ID
+FOLDER_ID="123vfqwW7DjzfX0BQYZ77Q0BOnenaYF58"
 SERVICE_ACCOUNT_FILE="gcloud-service-key.json"
 
 # Check if APK exists
@@ -19,8 +19,7 @@ if [ -z "$GCLOUD_SERVICE_ACCOUNT_JSON" ]; then
 fi
 
 # Save the JSON key file directly from the environment variable
-# (assuming it's not base64 encoded in Codemagic)
-echo "$GCLOUD_SERVICE_ACCOUNT_JSON" > $SERVICE_ACCOUNT_FILE
+printf '%s' "$GCLOUD_SERVICE_ACCOUNT_JSON" > $SERVICE_ACCOUNT_FILE
 
 # Check if the service account file was created properly
 if [ ! -s "$SERVICE_ACCOUNT_FILE" ]; then
@@ -38,6 +37,17 @@ fi
 
 # Authenticate with Google Cloud
 gcloud auth activate-service-account --key-file=$SERVICE_ACCOUNT_FILE
+
+# Verify folder access
+echo "Verifying folder access..."
+FOLDER_CHECK=$(curl -s -H "Authorization: Bearer $(gcloud auth print-access-token)" \
+    "https://www.googleapis.com/drive/v3/files/$FOLDER_ID")
+
+if [[ $FOLDER_CHECK == *"error"* ]]; then
+    echo "Error: Cannot access the specified folder. Please check folder ID and permissions"
+    echo "Response: $FOLDER_CHECK"
+    exit 1
+fi
 
 # Get the current date for the APK name
 CURRENT_DATE=$(date +"%Y-%m-%d_%H-%M")

@@ -2,7 +2,7 @@
 
 # Define variables
 APK_PATH=build/app/outputs/flutter-apk/app-release.apk
-FOLDER_ID="123vfqwW7DjzfX0BQYZ77Q0BOnenaYF58"  # Using the folder ID from your screenshot
+FOLDER_ID="1CK55EUd0suHdmIm_cowoHI4LCzwczQfm" 
 SERVICE_ACCOUNT_FILE="gcloud-service-key.json"
 
 # Check if APK exists

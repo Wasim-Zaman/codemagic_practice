@@ -2,7 +2,7 @@
 
 # Define variables
 APK_PATH=build/app/outputs/flutter-apk/app-release.apk
-FOLDER_ID="1CK55EUd0suHdmIm_cowoHI4LCzwczQfm" 
+FOLDER_ID="1CK55EUd0suHdmIm_cowoHI4LCzwczQfm"
 SERVICE_ACCOUNT_FILE="gcloud-service-key.json"
 
 # Check if APK exists
@@ -78,7 +78,35 @@ fi
 
 echo "Successfully obtained access token"
 
-# Try uploading to root of My Drive first (no parent specified)
+# First, try to get folder info to check permissions
+FOLDER_INFO=$(curl -s -H "Authorization: Bearer $ACCESS_TOKEN" \
+  "https://www.googleapis.com/drive/v3/files/$FOLDER_ID?fields=name,id,capabilities")
+
+echo "Folder info: $FOLDER_INFO"
+
+# Try uploading directly to the folder
+echo "Attempting to upload directly to folder..."
+FOLDER_RESPONSE=$(curl -s -X POST -L \
+  -H "Authorization: Bearer $ACCESS_TOKEN" \
+  -F "metadata={name:'$APK_NAME',parents:['$FOLDER_ID']};type=application/json;charset=UTF-8" \
+  -F "file=@$APK_PATH;type=application/vnd.android.package-archive" \
+  "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart")
+
+echo "Folder upload response: $FOLDER_RESPONSE"
+
+# Check if upload was successful
+if [[ $FOLDER_RESPONSE == *"id"* ]]; then
+    echo "Upload successful to folder!"
+    echo "Response: $FOLDER_RESPONSE"
+    
+    # Clean up
+    rm -f $SERVICE_ACCOUNT_FILE
+    exit 0
+else
+    echo "Upload to folder failed, trying with root My Drive..."
+fi
+
+# Try uploading to root of My Drive as fallback
 RESPONSE=$(curl -s -X POST -L \
   -H "Authorization: Bearer $ACCESS_TOKEN" \
   -F "metadata={name:'$APK_NAME'};type=application/json;charset=UTF-8" \
@@ -94,26 +122,7 @@ if [[ $RESPONSE == *"id"* ]]; then
     rm -f $SERVICE_ACCOUNT_FILE
     exit 0
 else
-    echo "Upload to My Drive root failed, trying with folder ID..."
-    echo "Response: $RESPONSE"
-fi
-
-# Upload the APK with folder ID
-RESPONSE=$(curl -s -X POST -L \
-  -H "Authorization: Bearer $ACCESS_TOKEN" \
-  -F "metadata={name:'$APK_NAME',parents:['$FOLDER_ID']};type=application/json;charset=UTF-8" \
-  -F "file=@$APK_PATH;type=application/vnd.android.package-archive" \
-  "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart")
-
-# Check if upload was successful
-if [[ $RESPONSE == *"id"* ]]; then
-    echo "Upload successful!"
-    echo "Response: $RESPONSE"
-else
     echo "Upload failed!"
     echo "Response: $RESPONSE"
     exit 1
 fi
-
-# Clean up
-rm -f $SERVICE_ACCOUNT_FILE

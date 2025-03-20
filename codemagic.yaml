@@ -15,6 +15,6 @@ workflows:
     scripts:
       - brew install jq
       - flutter build apk --release --dart-define=ENVIRONMENT=production
-      - bash upload_apk_new.sh
+      - bash upload_apk.sh
     artifacts:
       - build/app/outputs/flutter-apk/app-release.apk

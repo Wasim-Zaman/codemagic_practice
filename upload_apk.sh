@@ -4,71 +4,41 @@
 APK_PATH=build/app/outputs/flutter-apk/app-release.apk
 FOLDER_ID="1CK55EUd0suHdmIm_cowoHI4LCzwczQfm"
 SERVICE_ACCOUNT_FILE="gcloud-service-key.json"
+APK_NAME="codemagic-example.apk"
 
 # Check if APK exists
 if [ ! -f "$APK_PATH" ]; then
-    echo "Error: APK file not found at $APK_PATH"
+    echo "Error: APK file not found"
     exit 1
 fi
 
-# Debug: Check if the environment variable exists
-echo "Checking for GCLOUD_SERVICE_ACCOUNT_JSON variable..."
-if [ -z "$GCLOUD_SERVICE_ACCOUNT_JSON" ]; then
-    echo "Error: GCLOUD_SERVICE_ACCOUNT_JSON environment variable is not set"
-    exit 1
-fi
-
-# Write the JSON content to file
+# Write service account JSON to file
 printf '%s' "$GCLOUD_SERVICE_ACCOUNT_JSON" > $SERVICE_ACCOUNT_FILE
 
-# Debug: Check the content of the service account file
-echo "First 50 characters of service account file:"
-head -c 50 $SERVICE_ACCOUNT_FILE
-echo # New line
+# Get current time
+CURRENT_TIME=$(date +%s)
+EXPIRY_TIME=$((CURRENT_TIME + 3600))
 
-# Get the current date for the APK name
-CURRENT_DATE=$(date +"%Y-%m-%d_%H-%M")
-APK_NAME="app-release_${CURRENT_DATE}.apk"
+# Extract credentials
+CLIENT_EMAIL=$(jq -r '.client_email' $SERVICE_ACCOUNT_FILE)
+PRIVATE_KEY=$(jq -r '.private_key' $SERVICE_ACCOUNT_FILE)
 
-echo "Uploading APK as $APK_NAME to Google Drive folder $FOLDER_ID..."
+# Create JWT
+JWT_HEADER='{"alg":"RS256","typ":"JWT"}'
+JWT_HEADER_BASE64=$(echo -n "$JWT_HEADER" | openssl base64 -e -A | tr '+/' '-_' | tr -d '=')
+JWT_PAYLOAD="{\"iss\":\"$CLIENT_EMAIL\",\"scope\":\"https://www.googleapis.com/auth/drive\",\"aud\":\"https://oauth2.googleapis.com/token\",\"exp\":$EXPIRY_TIME,\"iat\":$CURRENT_TIME}"
+JWT_PAYLOAD_BASE64=$(echo -n "$JWT_PAYLOAD" | openssl base64 -e -A | tr '+/' '-_' | tr -d '=')
+JWT_UNSIGNED="$JWT_HEADER_BASE64.$JWT_PAYLOAD_BASE64"
+echo "$PRIVATE_KEY" > private_key.pem
+JWT_SIGNATURE=$(echo -n "$JWT_UNSIGNED" | openssl dgst -binary -sha256 -sign private_key.pem | openssl base64 -e -A | tr '+/' '-_' | tr -d '=')
+rm private_key.pem
+JWT_TOKEN="$JWT_UNSIGNED.$JWT_SIGNATURE"
 
-# Create JWT signature using Python
-JWT_SIGNATURE=$(python3 -c "
-import jwt
-import sys
-
-try:
-    with open('$SERVICE_ACCOUNT_FILE') as f:
-        import json
-        sa = json.load(f)
-    
-    header = {'alg': 'RS256', 'typ': 'JWT'}
-    payload = {
-        'iss': sa['client_email'],
-        'scope': 'https://www.googleapis.com/auth/drive',
-        'aud': 'https://oauth2.googleapis.com/token',
-        'exp': int($(date +%s)) + 3600,
-        'iat': int($(date +%s))
-    }
-    
-    token = jwt.encode(payload, sa['private_key'], algorithm='RS256', headers=header)
-    print(token)
-except Exception as e:
-    print(f'Error creating JWT: {str(e)}', file=sys.stderr)
-    sys.exit(1)
-")
-
-echo "JWT token: $JWT_SIGNATURE"
-
-# Exchange JWT for access token
+# Get access token
 OAUTH_RESPONSE=$(curl -s -X POST \
   -H "Content-Type: application/x-www-form-urlencoded" \
-  -d "grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer&assertion=$JWT_SIGNATURE" \
+  -d "grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer&assertion=$JWT_TOKEN" \
   https://oauth2.googleapis.com/token)
-
-echo "OAuth response: $OAUTH_RESPONSE"
-
-# Extract access token from response
 ACCESS_TOKEN=$(echo $OAUTH_RESPONSE | jq -r '.access_token')
 
 if [ -z "$ACCESS_TOKEN" ] || [ "$ACCESS_TOKEN" == "null" ]; then
@@ -76,53 +46,30 @@ if [ -z "$ACCESS_TOKEN" ] || [ "$ACCESS_TOKEN" == "null" ]; then
     exit 1
 fi
 
-echo "Successfully obtained access token"
+# Delete existing file if present
+EXISTING_FILE=$(curl -s -H "Authorization: Bearer $ACCESS_TOKEN" \
+  "https://www.googleapis.com/drive/v3/files?q=name='$APK_NAME'+and+'$FOLDER_ID'+in+parents+and+trashed=false")
+FILE_ID=$(echo $EXISTING_FILE | jq -r '.files[0].id')
+if [ -n "$FILE_ID" ] && [ "$FILE_ID" != "null" ]; then
+    curl -s -X DELETE -H "Authorization: Bearer $ACCESS_TOKEN" \
+      "https://www.googleapis.com/drive/v3/files/$FILE_ID" > /dev/null
+fi
 
-# First, try to get folder info to check permissions
-FOLDER_INFO=$(curl -s -H "Authorization: Bearer $ACCESS_TOKEN" \
-  "https://www.googleapis.com/drive/v3/files/$FOLDER_ID?fields=name,id,capabilities")
-
-echo "Folder info: $FOLDER_INFO"
-
-# Try uploading directly to the folder
-echo "Attempting to upload directly to folder..."
-FOLDER_RESPONSE=$(curl -s -X POST -L \
+# Upload APK
+UPLOAD_RESPONSE=$(curl -s -X POST -L \
   -H "Authorization: Bearer $ACCESS_TOKEN" \
   -F "metadata={name:'$APK_NAME',parents:['$FOLDER_ID']};type=application/json;charset=UTF-8" \
   -F "file=@$APK_PATH;type=application/vnd.android.package-archive" \
   "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart")
 
-echo "Folder upload response: $FOLDER_RESPONSE"
+# Clean up
+rm -f $SERVICE_ACCOUNT_FILE
 
-# Check if upload was successful
-if [[ $FOLDER_RESPONSE == *"id"* ]]; then
-    echo "Upload successful to folder!"
-    echo "Response: $FOLDER_RESPONSE"
-    
-    # Clean up
-    rm -f $SERVICE_ACCOUNT_FILE
+# Check upload status
+if [[ $UPLOAD_RESPONSE == *"id"* ]]; then
+    echo "Upload successful"
     exit 0
 else
-    echo "Upload to folder failed, trying with root My Drive..."
-fi
-
-# Try uploading to root of My Drive as fallback
-RESPONSE=$(curl -s -X POST -L \
-  -H "Authorization: Bearer $ACCESS_TOKEN" \
-  -F "metadata={name:'$APK_NAME'};type=application/json;charset=UTF-8" \
-  -F "file=@$APK_PATH;type=application/vnd.android.package-archive" \
-  "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart")
-
-# Check if upload was successful
-if [[ $RESPONSE == *"id"* ]]; then
-    echo "Upload successful to My Drive root!"
-    echo "Response: $RESPONSE"
-    
-    # Clean up
-    rm -f $SERVICE_ACCOUNT_FILE
-    exit 0
-else
-    echo "Upload failed!"
-    echo "Response: $RESPONSE"
+    echo "Upload failed"
     exit 1
 fi
